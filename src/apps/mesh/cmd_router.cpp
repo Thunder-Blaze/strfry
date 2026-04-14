@@ -312,7 +312,6 @@ struct Router {
             if (connectionTimeoutUs != newTimeoutUs) {
                 connectionTimeoutUs = newTimeoutUs;
                 LI << "Using connection timeout: " << (connectionTimeoutUs / 1'000'000) << " seconds";
-                // FIXME: this won't actually update the cron.repeat() frequency, so no hot reconfigs
             }
 
             // verbose
@@ -456,9 +455,10 @@ struct Router {
 
         cron.setupCb = []{ setThreadName("cron"); };
 
-        cron.repeat(connectionTimeoutUs, [&]{
+        cron.repeat_adjustable(connectionTimeoutUs, [&]{
             inbox.push_move(RouterEvent{RouterEvent::ReconnectCron{}});
             hubTrigger->send();
+            return connectionTimeoutUs;
         });
 
         cron.run();
