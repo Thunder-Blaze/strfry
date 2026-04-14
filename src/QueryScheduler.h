@@ -97,6 +97,14 @@ struct QueryScheduler : NonCopyable {
             levIdBatch.clear();
         }
 
+        if (!complete) {
+            auto maxTime = cfg().relay__maxQueryTimeMicroseconds;
+            if (maxTime > 0 && q->totalTime + q->currScanTime > maxTime) {
+                LW << "[" << q->sub.connId << "] REQ='" << q->sub.subId.sv() << "' exceeded total query time limit (" << (q->totalTime + q->currScanTime) << "us > " << maxTime << "us)";
+                complete = true;
+            }
+        }
+
         if (complete) {
             auto connId = q->sub.connId;
             removeSub(connId, q->sub.subId);

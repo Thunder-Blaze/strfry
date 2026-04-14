@@ -70,6 +70,9 @@ config:
   - name: relay__queryTimesliceBudgetMicroseconds
     desc: "How much uninterrupted CPU time a REQ query should get during its DB scan"
     default: 10000
+  - name: relay__maxQueryTimeMicroseconds
+    desc: "Maximum total CPU time a REQ query can accumulate across all timeslices (0 = unlimited)"
+    default: 0
   - name: relay__maxFilterLimit
     desc: "Maximum records that can be returned per filter"
     default: 500
