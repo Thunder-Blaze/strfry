@@ -76,7 +76,6 @@ struct EventToWrite {
     EventToWrite(std::string packedStr, std::string jsonStr, void *userData = nullptr) : packedStr(packedStr), jsonStr(jsonStr), userData(userData) {
     }
 
-    // FIXME: do we need these methods anymore?
     std::string_view id() {
         return PackedEventView(packedStr).id();
     }
