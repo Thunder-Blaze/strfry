@@ -82,6 +82,9 @@ config:
   - name: relay__maxSubsPerConnection
     desc: "Maximum number of subscriptions (concurrent REQs) a connection can have open at any time"
     default: 200
+  - name: relay__maxReqsPerSecondPerConnection
+    desc: "Maximum sustained REQ/COUNT messages per second per connection (token bucket, burst = rate). 0 = unlimited"
+    default: 0
 
   - name: relay__writePolicy__plugin
     desc: "If non-empty, path to an executable script that implements the writePolicy plugin logic"

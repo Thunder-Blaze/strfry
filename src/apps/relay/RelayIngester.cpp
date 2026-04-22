@@ -92,6 +92,7 @@ void RelayServer::runIngester(ThreadPool<MsgIngester>::Thread &thr) {
                 auto connId = msg->connId;
 
                 rsctx.connIdToAuthStatus.erase(connId);
+                rsctx.reqRateByConn.erase(connId);
 
                 tpWriter.dispatch(connId, MsgWriter{MsgWriter::CloseConn{connId}});
                 tpReqWorker.dispatch(connId, MsgReqWorker{MsgReqWorker::CloseConn{connId}});
@@ -203,6 +204,24 @@ void RelayServer::ingesterProcessReq(lmdb::txn &txn, RelayServerCtx &rsctx, uint
     if (arr.get_array().size() < 2 + 1) throw herr("arr too small");
     outSubIdStr = jsonGetString(arr[1], "subscription id was not a string");
     if (arr.get_array().size() > 2 + cfg().relay__maxReqFilterSize) throw herr("arr too big");
+
+    // Token-bucket rate limit on REQ/COUNT per connection.
+    // Refill rate = burst capacity = relay__maxReqsPerSecondPerConnection.
+    uint64_t reqLimit = cfg().relay__maxReqsPerSecondPerConnection;
+    if (reqLimit > 0) {
+        auto &state = rsctx.reqRateByConn[connId];
+        uint64_t nowUs = hoytech::curr_time_us();
+        double burst = (double)reqLimit;
+        if (state.lastRefillUs == 0) {
+            state.tokens = burst;
+        } else {
+            double elapsed = (double)(nowUs - state.lastRefillUs) / 1e6;
+            state.tokens = std::min(burst, state.tokens + elapsed * burst);
+        }
+        state.lastRefillUs = nowUs;
+        if (state.tokens < 1.0) throw herr("rate-limited: too many REQs/COUNTs per second");
+        state.tokens -= 1.0;
+    }
 
     uint64_t maxFilterLimit;
 

@@ -168,11 +168,19 @@ struct AuthStatus {
     }
 };
 
+struct ReqRateState {
+    // Token-bucket state for per-connection REQ/COUNT rate limiting.
+    // Burst capacity equals the steady-state rate (1 second of headroom).
+    double tokens = 0.0;
+    uint64_t lastRefillUs = 0;
+};
+
 struct RelayServerCtx {
     secp256k1_context *secpCtx = secp256k1_context_create(SECP256K1_CONTEXT_VERIFY);
     FilterValidator filterValidator;
     SessionToken::Generator challengeGenerator;
     flat_hash_map<uint64_t, AuthStatus> connIdToAuthStatus;
+    flat_hash_map<uint64_t, ReqRateState> reqRateByConn;
 };
 
 struct RelayServer {
