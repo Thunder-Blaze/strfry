@@ -49,7 +49,7 @@ RUN \
 
 COPY --from=build /build/strfry strfry
 COPY --from=build /build/strfry.conf strfry.conf
-COPY --from=build /build/strfry-db strfry-db
+RUN mkdir -p strfry-db
 
 EXPOSE 7777
 

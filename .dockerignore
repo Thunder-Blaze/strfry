@@ -1,0 +1,8 @@
+build/
+strfry-db/
+strfry
+**/*.o
+**/*.a
+**/*.d
+**/*.so
+**/*.dylib

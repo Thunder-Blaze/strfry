@@ -20,6 +20,7 @@ my %cfg = (
     other             => 3_000,
     duplicates        => 1_500,
     start_ts          => 1_700_000_000,
+    events            => undef,
 );
 
 my $help;
@@ -40,6 +41,7 @@ GetOptions(
     'other=i'              => \$cfg{other},
     'duplicates=i'         => \$cfg{duplicates},
     'start-ts=i'           => \$cfg{start_ts},
+    'events|e=i'           => \$cfg{events},
     'help|h'               => \$help,
 ) or die usage();
 
@@ -47,6 +49,24 @@ if ($help) {
     print usage();
     exit 0;
 }
+if (defined $cfg{events}) {
+    validate_positive_int('events', $cfg{events});
+    my $scale = $cfg{events} / 120_500.0;
+    
+    $cfg{users}             = int($cfg{users} * $scale);
+    $cfg{users}             = 1 if $cfg{users} < 1;
+    
+    $cfg{kind1_notes}       = int($cfg{kind1_notes} * $scale);
+    $cfg{kind4_dms}         = int($cfg{kind4_dms} * $scale);
+    $cfg{kind7_reactions}   = int($cfg{kind7_reactions} * $scale);
+    $cfg{replaceable}       = int($cfg{replaceable} * $scale);
+    $cfg{param_replaceable} = int($cfg{param_replaceable} * $scale);
+    $cfg{ephemeral}         = int($cfg{ephemeral} * $scale);
+    $cfg{deletions}         = int($cfg{deletions} * $scale);
+    $cfg{other}             = int($cfg{other} * $scale);
+    $cfg{duplicates}        = int($cfg{duplicates} * $scale);
+}
+
 
 validate_non_negative_int('seed', $cfg{seed});
 validate_positive_int('users', $cfg{users});

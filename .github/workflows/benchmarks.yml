@@ -1,0 +1,63 @@
+name: Strfry Benchmarks
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout strfry
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Checkout strfry-bench
+      uses: actions/checkout@v4
+      with:
+        repository: Thunder-Blaze/strfry-bench
+        path: strfry-bench
+
+    - name: Setup Rust
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install System Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y perl lmdb-utils sysstat linux-tools-common linux-tools-generic
+
+    - name: Build Strfry
+      run: |
+        make setup-golpe
+        make -j$(nproc)
+
+    - name: Build strfry-bench
+      run: |
+        cd strfry-bench
+        cargo build --release
+
+    - name: Run Benchmarks (Dry Run for standard CI)
+      # We use dry-run in the standard PR check to avoid blocking the queue for 10 minutes,
+      # but we can use full CI mode for scheduled runs or workflow_dispatch.
+      run: |
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          python3 bench/run_stats.py --ci-mode
+        else
+          python3 bench/run_stats.py --dry-run
+        fi
+
+    - name: Upload Benchmark Reports
+      uses: actions/upload-artifact@v4
+      with:
+        name: benchmark-reports
+        path: benchmark_report.md
