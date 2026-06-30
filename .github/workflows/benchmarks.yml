@@ -34,7 +34,9 @@ jobs:
     - name: Install System Dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y perl lmdb-utils sysstat linux-tools-common linux-tools-generic
+        sudo apt-get install -y perl lmdb-utils sysstat linux-tools-common linux-tools-generic \
+          build-essential git g++ make pkg-config libtool ca-certificates \
+          libssl-dev zlib1g-dev liblmdb-dev libflatbuffers-dev libsecp256k1-dev libzstd-dev
 
     - name: Build Strfry
       run: |
