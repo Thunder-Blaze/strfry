@@ -53,7 +53,7 @@ jobs:
       # but we can use full CI mode for scheduled runs or workflow_dispatch.
       run: |
         if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-          python3 bench/run_stats.py --ci-mode
+          python3 bench/run_stats.py
         else
           python3 bench/run_stats.py --dry-run
         fi
@@ -63,3 +63,4 @@ jobs:
       with:
         name: benchmark-reports
         path: benchmark_report.md
+        if-no-files-found: ignore
