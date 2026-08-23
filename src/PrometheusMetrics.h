@@ -107,6 +107,13 @@ public:
 
     // Connection tracking
     Gauge activeConnections;
+    Counter slowClientTerminations;
+
+    // AUTH metrics
+    Counter authChallengesSentTotal;
+    Counter authSuccessTotal;
+    Counter authFailureTotal;
+    Gauge authenticatedConnections;
 
     // Generate Prometheus text format output
     std::string render() const {
@@ -128,8 +135,8 @@ public:
             out << "nostr_relay_messages_total{verb=\"" << verb << "\"} " << count << "\n";
         }
         
-        // Events by kind
-        out << "# HELP nostr_events_total Total number of Nostr events by kind\n";
+        // Events by kind (incremented when an event is persisted as Written, not on ingress)
+        out << "# HELP nostr_events_total Total number of Nostr events persisted to the DB, by kind\n";
         out << "# TYPE nostr_events_total counter\n";
         auto events = nostrEventsByKind.getAll();
         for (const auto& [kind, count] : events) {
@@ -161,6 +168,27 @@ public:
         out << "# HELP strfry_connections_current Current number of active WebSocket connections\n";
         out << "# TYPE strfry_connections_current gauge\n";
         out << "strfry_connections_current " << activeConnections.get() << "\n";
+
+        out << "# HELP strfry_slow_client_terminations_total Connections closed for exceeding relay.maxPendingOutboundBytes\n";
+        out << "# TYPE strfry_slow_client_terminations_total counter\n";
+        out << "strfry_slow_client_terminations_total " << slowClientTerminations.get() << "\n";
+
+        // AUTH metrics
+        out << "# HELP strfry_auth_challenges_sent_total AUTH challenges sent to clients\n";
+        out << "# TYPE strfry_auth_challenges_sent_total counter\n";
+        out << "strfry_auth_challenges_sent_total " << authChallengesSentTotal.get() << "\n";
+
+        out << "# HELP strfry_auth_success_total Successful AUTH responses\n";
+        out << "# TYPE strfry_auth_success_total counter\n";
+        out << "strfry_auth_success_total " << authSuccessTotal.get() << "\n";
+
+        out << "# HELP strfry_auth_failure_total Failed AUTH responses\n";
+        out << "# TYPE strfry_auth_failure_total counter\n";
+        out << "strfry_auth_failure_total " << authFailureTotal.get() << "\n";
+
+        out << "# HELP strfry_authenticated_connections_current Current number of AUTHed connections\n";
+        out << "# TYPE strfry_authenticated_connections_current gauge\n";
+        out << "strfry_authenticated_connections_current " << authenticatedConnections.get() << "\n";
 
         return out.str();
     }

@@ -12,14 +12,21 @@
 
 #include <memory>
 
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__) || defined(__DragonFly__)
+#define st_mtim st_mtimespec
+#endif
+
 #include "hoytech/stream.h"
 
 #include "golpe.h"
 
 #include "events.h"
 
-#ifdef __FreeBSD__
+#if defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__) || defined(__DragonFly__)
 extern char **environ;
+#elif defined(__APPLE__)
+#include <crt_externs.h>
+#define environ (*_NSGetEnviron())
 #endif
 
 
@@ -172,6 +179,7 @@ struct PluginEventSifter {
         pid_t pid;
         const char * const argv[] = { "/bin/sh", "-c", pluginCmd.c_str(), nullptr, };
 
+        // FIXME: currently leaks. Should call posix_spawn_file_actions_destroy in a RAII wrapper
         posix_spawn_file_actions_t file_actions;
 
         if (

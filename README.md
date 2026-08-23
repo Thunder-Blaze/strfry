@@ -65,11 +65,19 @@ On Debian/Ubuntu use these commands:
 
 FreeBSD has slightly different commands (warning: possibly out of date):
 
-    pkg install -y gcc gmake cmake git perl5 openssl lmdb flatbuffers libuv libinotify zstr secp256k1 zlib-ng
+    pkg install -y gmake git perl5 openssl lmdb flatbuffers libuv secp256k1 zstd
     git clone https://github.com/hoytech/strfry && cd strfry/
     git submodule update --init
     gmake setup-golpe
     gmake -j4
+
+macOS commands (using Homebrew):
+
+    brew install pkg-config libtool openssl zlib lmdb flatbuffers secp256k1 zstd libuv perl
+    git clone https://github.com/hoytech/strfry && cd strfry/
+    git submodule update --init
+    make setup-golpe
+    make -j4
 
 To upgrade strfry, do the following:
 
@@ -131,6 +139,28 @@ The `strfry import` command reads line-delimited JSON (jsonl) from its standard 
     cat my-nostr-dump.jsonl | ./strfry import
 
 * By default, it will verify the signatures and other fields of the events. If you know the messages are valid, you can speed up the import a bit by passing the `--no-verify` flag.
+
+For local testing/development, this repo includes a deterministic seed-data generator:
+
+    scripts/generate-seed-data.sh
+
+This wrapper runs `scripts/generate-seed-data.pl`, which produces line-delimited JSON suitable for `strfry import`. With defaults it generates around 100k events.
+
+Useful options:
+
+* `--seed <int>`: deterministic random seed (same seed + same args => same dataset)
+* `--users <int>`: number of distinct authors
+* `--kind1-notes <int>`: number of kind 1 notes
+* `--output <path>`: output file path (`-` means stdout)
+* `--deletions`, `--replaceable`, `--param-replaceable`, `--ephemeral`, etc: tune event mix by scenario
+
+To ingest generated data:
+
+    cat seeds/events.jsonl | ./strfry import --no-verify
+
+To see all generator options:
+
+    scripts/generate-seed-data.sh --help
 
 ### Exporting data
 
@@ -303,6 +333,8 @@ In addition to write-policy plugins, plugins can also be used inside [strfry rou
 
 See the [plugin documentation](https://github.com/hoytech/strfry/blob/master/docs/plugins.md) for details and examples.
 
+See the file [docs/community.md](https://github.com/hoytech/strfry/blob/master/docs/community.md) for a list of community plugins. Please create a PR to add your own!
+
 
 
 
@@ -372,6 +404,8 @@ For details on strfry's architecture, see the [architecture.md](https://github.c
 To report issues or submit pull requests, please visit the [strfry github page](https://github.com/hoytech/strfry).
 
 To chat with the strfry devs and community, please [join our telegram chat](https://t.me/strfry_users).
+
+There is a list of community contributions in [docs/community.md](https://github.com/hoytech/strfry/blob/master/docs/community.md). Please create a PR to add your own!
 
 
 

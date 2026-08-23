@@ -1,5 +1,6 @@
 #include "RelayServer.h"
 #include "jsonParseUtils.h"
+#include "ReadRestrictor.h"
 
 
 void RelayServer::runIngester(ThreadPool<MsgIngester>::Thread &thr) {
@@ -43,6 +44,7 @@ void RelayServer::runIngester(ThreadPool<MsgIngester>::Thread &thr) {
                             try {
                                 ingesterProcessAuth(rsctx, msg->connId, arr[1]);
                             } catch (std::exception &e) {
+                                PrometheusMetrics::getInstance().authFailureTotal.inc();
                                 sendOKResponse(msg->connId, arr[1].is_object() && arr[1].at("id").is_string() ? arr[1].at("id").get_string() : "?",
                                                false, std::string("error: ") + e.what());
                             }
@@ -67,12 +69,12 @@ void RelayServer::runIngester(ThreadPool<MsgIngester>::Thread &thr) {
                             } catch (std::exception &e) {
                                 sendNoticeError(msg->connId, std::string("bad close: ") + e.what());
                             }
-                        } else if (cmd.starts_with("NEG-")) {
+                        } else if (cmd == "NEG-OPEN" || cmd == "NEG-MSG" || cmd == "NEG-CLOSE") {
                             PROM_INC_CLIENT_MSG(cmd);
                             if (!cfg().relay__negentropy__enabled) throw herr("negentropy disabled");
 
                             try {
-                                ingesterProcessNegentropy(txn, msg->connId, arr);
+                                ingesterProcessNegentropy(txn, rsctx, msg->connId, arr);
                             } catch (std::exception &e) {
                                 sendNoticeError(msg->connId, std::string("negentropy error: ") + e.what());
                             }
@@ -91,7 +93,8 @@ void RelayServer::runIngester(ThreadPool<MsgIngester>::Thread &thr) {
             } else if (auto msg = std::get_if<MsgIngester::CloseConn>(&newMsg.msg)) {
                 auto connId = msg->connId;
 
-                rsctx.connIdToAuthStatus.erase(connId);
+                PrometheusMetrics::getInstance().authenticatedConnections.dec();
+                rsctx.connIdToAuthSession.erase(connId);
 
                 tpWriter.dispatch(connId, MsgWriter{MsgWriter::CloseConn{connId}});
                 tpReqWorker.dispatch(connId, MsgReqWorker{MsgReqWorker::CloseConn{connId}});
@@ -112,9 +115,6 @@ void RelayServer::ingesterProcessEvent(lmdb::txn &txn, RelayServerCtx &rsctx, ui
 
     PackedEventView packed(packedStr);
     Bytes32 authedPubkey;
-    
-    // Track event kind metrics
-    PROM_INC_EVENT_KIND(std::to_string(packed.kind()));
 
     {
         // discard reposts that embed protected events
@@ -156,11 +156,13 @@ void RelayServer::ingesterProcessEvent(lmdb::txn &txn, RelayServerCtx &rsctx, ui
                 return;
             }
 
-            auto it = rsctx.connIdToAuthStatus.find(connId);
-            if (it == rsctx.connIdToAuthStatus.end()) {
+            auto it = rsctx.connIdToAuthSession.find(connId);
+
+            if (it == rsctx.connIdToAuthSession.end()) {
                 // we haven't sent an AUTH event for this, so first we generate a challenge for this connection
                 auto challenge = rsctx.challengeGenerator.get();
-                rsctx.connIdToAuthStatus.emplace(connId, challenge);
+                
+                rsctx.connIdToAuthSession.emplace(connId, challenge);
 
                 LI << "[" << connId << "] Protected event, requesting AUTH: " << idHex;
                 sendAuthChallenge(connId, challenge);
@@ -214,12 +216,44 @@ void RelayServer::ingesterProcessReq(lmdb::txn &txn, RelayServerCtx &rsctx, uint
         maxFilterLimit = cfg().relay__maxFilterLimit;
     }
 
-    NostrFilterGroup filterGroup(arr, maxFilterLimit);
+    NostrFilterGroup filterGroup = NostrFilterGroup::fromReq(arr, maxFilterLimit);
 
     try {
         rsctx.filterValidator.validate(filterGroup);
     } catch (std::exception &e) {
         throw herr("filter validation failed: ", e.what());
+    }
+
+    auto it = rsctx.connIdToAuthSession.find(connId);
+    bool hasSession = it != rsctx.connIdToAuthSession.end();
+    bool isAuthed = hasSession && !it->second.authed.isNull();
+    bool shouldRejectReq = false;
+
+    if (countOnly) {
+        // COUNT can't be filtered per event, so a restricted-kind filter must be
+        // scoped to the client's own pubkeys via authors/#p.
+        shouldRejectReq = !ReadRestrictor::isFilterAllowedToCount(filterGroup, isAuthed ? it->second.authed : Bytes32());
+    } else {
+        // if the filter group contains no filter that has a kind that is not restricted,
+        // that means an unauthenticated client won't be able to see anything
+        if (ReadRestrictor::isFilterGroupFullyRestricted(filterGroup)) {
+            shouldRejectReq = !isAuthed;
+        }
+    }
+
+    if (shouldRejectReq) {
+        if (!hasSession) {
+            auto challenge = rsctx.challengeGenerator.get();
+            rsctx.connIdToAuthSession.emplace(connId, challenge);
+            LI << "[" << connId << "] Requesting initial AUTH";
+            sendAuthChallenge(connId, challenge);
+            sendClosedError(connId, outSubIdStr, "auth-required: requested filter requires authentication");
+        } else if (countOnly && isAuthed) {
+            sendClosedError(connId, outSubIdStr, "count-failed: can only count events you are involved in");
+        } else {
+            sendClosedError(connId, outSubIdStr, "auth-required: requested filter requires authentication");
+        }
+        return;
     }
 
     Subscription sub(connId, outSubIdStr, std::move(filterGroup), countOnly);
@@ -247,14 +281,16 @@ void RelayServer::ingesterProcessAuth(RelayServerCtx &rsctx, uint64_t connId, co
     if (cfg().relay__auth__serviceUrl.empty()) throw herr("relay needs serviceUrl to be configured before AUTH can work");
 
     std::string packedStr, jsonStr;
+    // Note: kind 22242 is ephemeral, so parseAndVerifyEvent() also applies
+    // the stricter ephemeral recency check here.
     parseAndVerifyEvent(eventJson, rsctx.secpCtx, true, true, packedStr, jsonStr);
 
     PackedEventView packed(packedStr);
 
     if (packed.kind() != 22242) throw herr("wrong event kind, expected 22242");
 
-    auto it = rsctx.connIdToAuthStatus.find(connId);
-    if (it == rsctx.connIdToAuthStatus.end()) throw herr("no auth status available for connection");
+    auto it = rsctx.connIdToAuthSession.find(connId);
+    if (it == rsctx.connIdToAuthSession.end()) throw herr("no auth status available for connection");
 
     auto &as = it->second;
 
@@ -281,37 +317,72 @@ void RelayServer::ingesterProcessAuth(RelayServerCtx &rsctx, uint64_t connId, co
     if (!foundCorrectRelayUrl) throw herr("incorrect or missing relay tag, expected: " + cfg().relay__auth__serviceUrl);
 
     // set the connection as authenticated with this pubkey
-    as.authed = packed.pubkey();
+    as.markAuthed(packed.pubkey());
+    tpReqWorker.dispatch(connId, MsgReqWorker{MsgReqWorker::SetAuth{connId, packed.pubkey()}});
+    tpReqMonitor.dispatch(connId, MsgReqMonitor{MsgReqMonitor::SetAuth{connId, packed.pubkey()}});
+    PrometheusMetrics::getInstance().authSuccessTotal.inc();
+    PrometheusMetrics::getInstance().authenticatedConnections.inc();
 
     LI << "[" << connId << "] AUTHed as " << to_hex(packed.pubkey());
     sendOKResponse(connId, to_hex(packed.id()), true, "successfully authenticated");
 }
 
-void RelayServer::ingesterProcessNegentropy(lmdb::txn &txn, uint64_t connId, const tao::json::value &arr) {
-    const auto &subscriptionStr = jsonGetString(arr[1], "NEG-OPEN subscription id was not a string");
+void RelayServer::ingesterProcessNegentropy(lmdb::txn &txn, RelayServerCtx &rsctx, uint64_t connId, const tao::json::value &arr) {
+    const auto &vals = arr.get_array();
 
-    if (arr.at(0) == "NEG-OPEN") {
-        if (arr.get_array().size() < 4) throw herr("negentropy query missing elements");
+    if (vals.size() < 2) throw herr("negentropy query missing elements");
+
+    const auto &cmd = jsonGetString(vals[0], "negentropy command was not a string");
+    const auto &subscriptionStr = jsonGetString(vals[1], "NEG subscription id was not a string");
+
+    if (cmd == "NEG-OPEN") {
+        if (vals.size() < 4) throw herr("negentropy query missing elements");
 
         auto maxFilterLimit = cfg().relay__negentropy__maxSyncEvents + 1;
 
-        auto filterJson = arr.at(2);
+        auto filterJson = vals[2];
         if (!filterJson.is_object()) throw herr("negentropy filter must be an object");
 
-        NostrFilterGroup filter = NostrFilterGroup::unwrapped(filterJson, maxFilterLimit);
+        NostrFilterGroup filter(filterJson, maxFilterLimit);
+
+        // if the filter group contains no filter that has a kind that is not restricted,
+        // that means an unauthenticated client won't be able to see anything
+        if (ReadRestrictor::isFilterGroupFullyRestricted(filter)) {
+            auto it = rsctx.connIdToAuthSession.find(connId);
+            bool hasSession = it != rsctx.connIdToAuthSession.end();
+            bool isAuthed = hasSession && !it->second.authed.isNull();
+            if (!isAuthed) {
+                if (!hasSession) {
+                    auto challenge = rsctx.challengeGenerator.get();
+                    rsctx.connIdToAuthSession.emplace(connId, challenge);
+                    LI << "[" << connId << "] Requesting initial AUTH";
+                    sendAuthChallenge(connId, challenge);
+                }
+                PROM_INC_RELAY_MSG("NEG-ERR");
+                sendToConn(connId, tao::json::to_string(tao::json::value::array({
+                    "NEG-ERR",
+                    subscriptionStr,
+                    "auth-required: requested filter requires authentication"
+                })));
+                return;
+            }
+        }
+
         Subscription sub(connId, subscriptionStr, std::move(filter));
 
         filterJson.get_object().erase("since");
         filterJson.get_object().erase("until");
         std::string filterStr = tao::json::to_string(filterJson);
 
-        std::string negPayload = from_hex(jsonGetString(arr.at(3), "negentropy payload not a string"));
+        std::string negPayload = from_hex(jsonGetString(vals[3], "negentropy payload not a string"));
 
         tpNegentropy.dispatch(connId, MsgNegentropy{MsgNegentropy::NegOpen{std::move(sub), std::move(filterStr), std::move(negPayload)}});
-    } else if (arr.at(0) == "NEG-MSG") {
-        std::string negPayload = from_hex(jsonGetString(arr.at(2), "negentropy payload not a string"));
+    } else if (cmd == "NEG-MSG") {
+        if (vals.size() < 3) throw herr("negentropy message missing elements");
+
+        std::string negPayload = from_hex(jsonGetString(vals[2], "negentropy payload not a string"));
         tpNegentropy.dispatch(connId, MsgNegentropy{MsgNegentropy::NegMsg{connId, SubId(subscriptionStr), std::move(negPayload)}});
-    } else if (arr.at(0) == "NEG-CLOSE") {
+    } else if (cmd == "NEG-CLOSE") {
         tpNegentropy.dispatch(connId, MsgNegentropy{MsgNegentropy::NegClose{connId, SubId(subscriptionStr)}});
     } else {
         throw herr("unknown command");
